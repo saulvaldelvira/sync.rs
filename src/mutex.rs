@@ -1,6 +1,8 @@
 //! A mutex, providing unique syncronized access to a value
 
 use core::cell::UnsafeCell;
+use core::cmp::Ordering;
+use core::fmt::{Debug, Display};
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
@@ -54,6 +56,30 @@ pub struct MutexGuard<'a, T: ?Sized> {
     _lock: SpinLockGuard<'a>,
 }
 
+impl<T: Debug> Debug for MutexGuard<'_, T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "MutexGuard({:?})", unsafe { &*self.data.as_ptr() })
+    }
+}
+
+impl<T: Display> Display for MutexGuard<'_, T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        unsafe { <T as Display>::fmt(self.data.as_ref(), f) }
+    }
+}
+
+impl<T: PartialEq> PartialEq for MutexGuard<'_, T> {
+    fn eq(&self, other: &Self) -> bool {
+        unsafe { self.data.as_ref().eq(other.data.as_ref()) }
+    }
+}
+
+impl<T: PartialOrd> PartialOrd for MutexGuard<'_, T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        unsafe { self.data.as_ref().partial_cmp(other.data.as_ref()) }
+    }
+}
+
 /// It's safe to drop a `MutexGuard` on a different thread from
 /// the one it created it
 unsafe impl<T: ?Sized + Send> Send for MutexGuard<'_, T> {}
@@ -85,6 +111,17 @@ impl<T> Mutex<T> {
         }
     }
 
+    /// Consumes `self` and returns the inner `T` value
+    ///
+    /// # Safety
+    /// Since we take `self` by value, we don't need to
+    /// synchronize the access.
+    pub fn into_inner(self) -> T {
+        UnsafeCell::into_inner(self.data)
+    }
+}
+
+impl<T: ?Sized> Mutex<T> {
     /// Returns a [lock guard](MutexGuard) for `self`, if it is
     /// available.
     /// If the operation whould've locked the execution, returns
@@ -148,13 +185,23 @@ impl<T> Mutex<T> {
         self.data.get_mut()
     }
 
-    /// Consumes `self` and returns the inner `T` value
+    /// Returns true if `self` is currently locked
     ///
-    /// # Safety
-    /// Since we take `self` by value, we don't need to
-    /// synchronize the access.
-    pub fn into_inner(self) -> T {
-        UnsafeCell::into_inner(self.data)
+    /// # Example
+    /// ```
+    /// use syncrs::Mutex;
+    ///
+    /// let mutex = Mutex::new(5);
+    ///
+    /// {
+    ///     let guard = mutex.lock();
+    ///     assert!(mutex.is_locked());
+    /// } // guard is dropped here
+    /// assert!(!mutex.is_locked());
+    /// ```
+    #[inline]
+    pub fn is_locked(&self) -> bool {
+        self.lock.is_locked()
     }
 }
 
