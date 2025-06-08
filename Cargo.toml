@@ -1,0 +1,11 @@
+[package]
+name = "syncrs"
+version = "0.1.0"
+edition = "2024"
+description = "spinlock-based syncronization primitives for no_std enviroments"
+authors = ["Saúl Valdelvira <saul@saulv.es>"]
+license = "GPL-3.0-only"
+readme = "README"
+repository = "https://github.com/saulvaldelvira/sync.rs"
+
+[dependencies]

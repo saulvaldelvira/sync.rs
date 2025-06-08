@@ -1,0 +1,14 @@
+Sync(rs)
+========
+Spinlock-based syncronization primitives for `no_std` rust enviroments
+
+== Documentation ==
+To build the documentation, run `cargo doc`, or
+browse it online at https://docs.rs/syncrs
+
+====
+Copyright (C) 2025 Saúl Valdelvira
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the
+Free Software Foundation, version 3.
