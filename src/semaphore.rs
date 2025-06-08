@@ -8,6 +8,7 @@ pub struct Semaphore {
     max: Option<u16>,
 }
 
+#[must_use = "if unused, the lock will release automatically"]
 pub struct SemaphoreGuard<'a> {
     lock: &'a AtomicU16,
 }

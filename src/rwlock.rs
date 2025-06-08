@@ -26,32 +26,36 @@ struct State {
 /// Unlike [Mutex], this lock allows multiple read locks at the same time. It's
 /// more convenient for uses where writing is less common, and you want a way to
 /// read from multiple sources without the overhead of constantly locking and unlocking.
-pub struct RwLock<T> {
-    elem: UnsafeCell<T>,
+pub struct RwLock<T: ?Sized> {
     state: Mutex<State>,
+    elem: UnsafeCell<T>,
 }
 
-unsafe impl<T> Sync for RwLock<T> {}
-unsafe impl<T> Send for RwLock<T> {}
+/// `T` needs to be `Send`, since we could unwrap the
+/// inner type using [RwLock::into_inner]
+unsafe impl<T: ?Sized + Send> Send for RwLock<T> {}
+
+unsafe impl<T: ?Sized + Send + Sync> Sync for RwLock<T> {}
 
 /// A read guard for a [RwLock].
 /// This object is created by [RwLock::read]. It provides
 /// read-only access to the inner value
-pub struct RwLockReadGuard<'a, T> {
+#[must_use = "if unused, the lock will release automatically"]
+pub struct RwLockReadGuard<'a, T: ?Sized> {
     elem: NonNull<T>,
     guard: &'a Mutex<State>,
 }
 
-unsafe impl<T> Sync for RwLockReadGuard<'_, T> {}
-unsafe impl<T> Send for RwLockReadGuard<'_, T> {}
+unsafe impl<T: ?Sized> Send for RwLockReadGuard<'_, T> {}
+unsafe impl<T: ?Sized + Sync> Sync for RwLockReadGuard<'_, T> {}
 
-impl<T> Drop for RwLockReadGuard<'_, T> {
+impl<T: ?Sized> Drop for RwLockReadGuard<'_, T> {
     fn drop(&mut self) {
         self.guard.lock().read_count -= 1;
     }
 }
 
-impl<T> Deref for RwLockReadGuard<'_, T> {
+impl<T: ?Sized> Deref for RwLockReadGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -63,15 +67,16 @@ impl<T> Deref for RwLockReadGuard<'_, T> {
 /// This object is created by [RwLock::write]
 ///
 /// It provides unique (thus mutable) access to the inner object.
-pub struct RwLockWriteGuard<'a, T> {
+#[must_use = "if unused, the lock will release automatically"]
+pub struct RwLockWriteGuard<'a, T: ?Sized> {
     elem: NonNull<T>,
     guard: &'a Mutex<State>,
 }
 
-unsafe impl<T> Sync for RwLockWriteGuard<'_, T> {}
-unsafe impl<T> Send for RwLockWriteGuard<'_, T> {}
+unsafe impl<T: ?Sized> Send for RwLockWriteGuard<'_, T> {}
+unsafe impl<T: ?Sized + Sync> Sync for RwLockWriteGuard<'_, T> {}
 
-impl<T> Deref for RwLockWriteGuard<'_, T> {
+impl<T: ?Sized> Deref for RwLockWriteGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -79,13 +84,13 @@ impl<T> Deref for RwLockWriteGuard<'_, T> {
     }
 }
 
-impl<T> DerefMut for RwLockWriteGuard<'_, T> {
+impl<T: ?Sized> DerefMut for RwLockWriteGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { self.elem.as_mut() }
     }
 }
 
-impl<T> Drop for RwLockWriteGuard<'_, T> {
+impl<T: ?Sized> Drop for RwLockWriteGuard<'_, T> {
     fn drop(&mut self) {
         self.guard.lock().writing = false;
     }
@@ -107,7 +112,6 @@ pub enum RwLockError {
 pub type RwLockResult<T> = Result<T, RwLockError>;
 
 impl<T> RwLock<T> {
-
     /// Creates a new `RwLock` from the given element
     pub const fn new(elem: T) -> Self {
         Self {
@@ -119,6 +123,17 @@ impl<T> RwLock<T> {
         }
     }
 
+    /// Consumes `self` and returns the inner `T`
+    ///
+    /// # Safety
+    /// Since we got `self` as an owned value, we don't need
+    /// to worry about synchronization.
+    pub fn into_inner(self) -> T {
+        UnsafeCell::into_inner(self.elem)
+    }
+}
+
+impl<T: ?Sized> RwLock<T> {
     /// Locks `self` for reading.
     ///
     /// The returned [RwLockReadGuard] grants read-only access to the data

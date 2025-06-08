@@ -6,22 +6,61 @@ use core::ptr::NonNull;
 
 use crate::spin::{SpinLock, SpinLockGuard};
 
-/// A mutex.
-pub struct Mutex<T> {
+/// A mutex grants synchronized access to a value
+///
+/// # Example
+/// ```
+/// use syncrs::Mutex;
+/// use std::sync::Arc;
+///
+/// let n = Arc::new(Mutex::new(0));
+///
+/// let threads = (0..10).map(|_|{
+///     let c = Arc::clone(&n);
+///     std::thread::spawn(move || {
+///         let mut sync_n = c.lock();
+///         for _ in 0..10 {
+///             *sync_n += 1;
+///         }
+///     })
+/// }).collect::<Vec<_>>();
+///
+/// for t in threads {
+///     t.join().unwrap();
+/// }
+///
+/// assert_eq!(*n.lock(), 100);
+/// ```
+pub struct Mutex<T: ?Sized> {
     lock: SpinLock,
     data: UnsafeCell<T>,
 }
 
-unsafe impl<T> Sync for Mutex<T> {}
-unsafe impl<T> Send for Mutex<T> {}
+/// `T` must be Send for `Mutex<T>` to be Send
+/// It's possible to unwrap the `Mutex` into it's inner
+/// value ([Mutex::into_inner]). So we need to make sure
+/// that T is Send.
+unsafe impl<T: ?Sized + Send> Send for Mutex<T> {}
 
-pub struct MutexGuard<'a, T> {
-    _lock: SpinLockGuard<'a>,
+unsafe impl<T: ?Sized + Send> Sync for Mutex<T> {}
+
+/// A guard for a [Mutex]
+///
+/// This struct is built by [Mutex::lock], and it
+/// unlocks the mutex when droped.
+#[must_use = "if unused, the lock will release automatically"]
+pub struct MutexGuard<'a, T: ?Sized> {
     data: NonNull<T>,
+    _lock: SpinLockGuard<'a>,
 }
 
-unsafe impl<T> Sync for MutexGuard<'_, T> {}
-unsafe impl<T> Send for MutexGuard<'_, T> {}
+/// It's safe to drop a `MutexGuard` on a different thread from
+/// the one it created it
+unsafe impl<T: ?Sized + Send> Send for MutexGuard<'_, T> {}
+
+/// `T` must be `Sync` for `MutexGuard` to be `Sync`, since
+/// `MutexGuard` derefs to `&T`
+unsafe impl<T: ?Sized + Sync> Sync for MutexGuard<'_, T> {}
 
 impl<T> Deref for MutexGuard<'_, T> {
     type Target = T;
@@ -38,7 +77,6 @@ impl<T> DerefMut for MutexGuard<'_, T> {
 }
 
 impl<T> Mutex<T> {
-
     /// Creates a new `Mutex` from the given value
     pub const fn new(val: T) -> Self {
         Self {
@@ -53,6 +91,19 @@ impl<T> Mutex<T> {
     /// [None] inmediately
     ///
     /// The lock is held until the `MutexGuard` is dropped.
+    ///
+    /// # Example
+    /// ```
+    /// use syncrs::Mutex;
+    ///
+    /// let mutex = Mutex::new(10);
+    /// let guard1 = mutex.lock();
+    ///
+    /// // guard1 holds the lock
+    /// assert_eq!(mutex.try_lock(), None);
+    /// drop(guard1); // This frees the mutex
+    /// assert!(mutex.try_lock().is_some());
+    /// ```
     pub fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
         self.lock.try_lock().map(|guard| {
             unsafe {
@@ -66,6 +117,15 @@ impl<T> Mutex<T> {
     /// a [guard](MutexGuard) to the object.
     ///
     /// The lock is held until the `MutexGuard` is dropped.
+    ///
+    /// # Example
+    /// ```
+    /// use syncrs::Mutex;
+    ///
+    /// let mutex = Mutex::new(10);
+    /// let guard1 = mutex.lock();
+    /// assert_eq!(*guard1, 10);
+    /// ```
     pub fn lock(&self) -> MutexGuard<'_, T> {
         let guard = self.lock.lock();
         unsafe {
@@ -83,12 +143,23 @@ impl<T> Mutex<T> {
     /// we need not to worry about synchronization.
     ///
     /// This is faster that spinlocking, and is 100% safe.
-    pub fn get_mut(&mut self) -> &mut T {
+    #[inline]
+    pub const fn get_mut(&mut self) -> &mut T {
         self.data.get_mut()
+    }
+
+    /// Consumes `self` and returns the inner `T` value
+    ///
+    /// # Safety
+    /// Since we take `self` by value, we don't need to
+    /// synchronize the access.
+    pub fn into_inner(self) -> T {
+        UnsafeCell::into_inner(self.data)
     }
 }
 
 impl<T: Default> Default for Mutex<T> {
+    #[inline]
     fn default() -> Self {
         Self::new(T::default())
     }

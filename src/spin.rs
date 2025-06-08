@@ -12,9 +12,13 @@ pub struct SpinLock {
 ///
 /// This structure represents a borrow of the spinlock.
 /// When droped, the [SpinLock] is marked as available again
+#[must_use = "if unused, the lock will release automatically"]
 pub struct SpinLockGuard<'a> {
     lock: &'a AtomicBool,
 }
+
+unsafe impl Send for SpinLockGuard<'_> {}
+unsafe impl Sync for SpinLockGuard<'_> {}
 
 impl Drop for SpinLockGuard<'_> {
     fn drop(&mut self) {

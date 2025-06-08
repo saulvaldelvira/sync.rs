@@ -24,5 +24,3 @@ pub use rwlock::RwLock;
 
 pub mod spin;
 pub mod semaphore;
-
-
