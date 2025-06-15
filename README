@@ -1,6 +1,6 @@
 Sync(rs)
 ========
-Spinlock-based syncronization primitives for `no_std` rust enviroments
+Spinlock-based syncronization primitives for `no_std` enviroments
 
 Includes
 - Mutex

@@ -46,6 +46,9 @@ where
     /// Gets the element inside `self`. If it's the first access,
     /// initializes it with the function passed to [Self::new]
     ///
+    /// # Panics
+    /// If the initialization function panics, the panic is propagated to the caller
+    ///
     /// # Example
     /// ```
     /// use syncrs::LazyLock;

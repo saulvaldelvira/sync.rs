@@ -12,15 +12,13 @@ use crate::spin::{SpinLock, SpinLockGuard};
 ///
 /// # Example
 /// ```
-/// use syncrs::Mutex;
-/// use std::sync::Arc;
+/// use syncrs::{Mutex, LazyLock};
 ///
-/// let n = Arc::new(Mutex::new(0));
+/// static N: Mutex<u32> = Mutex::new(0);
 ///
 /// let threads = (0..10).map(|_|{
-///     let c = Arc::clone(&n);
 ///     std::thread::spawn(move || {
-///         let mut sync_n = c.lock();
+///         let mut sync_n = N.lock();
 ///         for _ in 0..10 {
 ///             *sync_n += 1;
 ///         }
@@ -31,7 +29,7 @@ use crate::spin::{SpinLock, SpinLockGuard};
 ///     t.join().unwrap();
 /// }
 ///
-/// assert_eq!(*n.lock(), 100);
+/// assert_eq!(*N.lock(), 100);
 /// ```
 pub struct Mutex<T: ?Sized> {
     lock: SpinLock,
@@ -46,7 +44,7 @@ unsafe impl<T: ?Sized + Send> Send for Mutex<T> {}
 
 unsafe impl<T: ?Sized + Send> Sync for Mutex<T> {}
 
-/// A guard for a [Mutex]
+/// A RAII structure for a [mutex](Mutex) lock
 ///
 /// This struct is built by [Mutex::lock], and it
 /// unlocks the mutex when droped.
@@ -116,6 +114,14 @@ impl<T> Mutex<T> {
     /// # Safety
     /// Since we take `self` by value, we don't need to
     /// synchronize the access.
+    ///
+    /// # Example
+    /// ```
+    /// use syncrs::Mutex;
+    ///
+    /// let mutex = Mutex::new(120);
+    /// assert_eq!(Mutex::into_inner(mutex), 120);
+    /// ```
     pub fn into_inner(self) -> T {
         UnsafeCell::into_inner(self.data)
     }

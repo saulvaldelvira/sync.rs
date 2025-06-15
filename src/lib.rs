@@ -13,6 +13,55 @@
  *  along with this program.  If not, see <https://www.gnu.org/licenses/>. */
 
 //! Spinlock-based synchronization primitives
+//!
+//! The following synchronization primitives are implemented
+//! - [Mutex]
+//! - [RwLock]
+//! - [OnceLock]
+//! - [LazyLock]
+//!
+//! # Examples
+//! ## Mutex
+//! ```
+//! use syncrs::{Mutex, LazyLock};
+//!
+//! static N: Mutex<u32> = Mutex::new(0);
+//!
+//! let threads = (0..10).map(|_|{
+//!     std::thread::spawn(move || {
+//!         let mut sync_n = N.lock();
+//!         for _ in 0..10 {
+//!             *sync_n += 1;
+//!         }
+//!     })
+//! }).collect::<Vec<_>>();
+//!
+//! for t in threads {
+//!     t.join().unwrap();
+//! }
+//!
+//! assert_eq!(*N.lock(), 100);
+//! ```
+//!
+//! ## LazyLock
+//! ```
+//! use syncrs::LazyLock;
+//! use std::collections::HashMap;
+//!
+//! static MAP: LazyLock<HashMap<i32, String>> = LazyLock::new(|| {
+//!     let mut map = HashMap::new();
+//!     for n in 0..10 {
+//!         map.insert(n, format!("{n}"));
+//!     }
+//!     map
+//! });
+//!
+//! let map = MAP.get(); /* MAP is initialized at this point */
+//! assert_eq!(
+//!     map.get(&4).map(|s| s.as_str()),
+//!     Some("4"),
+//! );
+//! ```
 
 #![no_std]
 
@@ -23,10 +72,13 @@ pub mod rwlock;
 pub use rwlock::RwLock;
 
 pub mod spin;
-pub mod semaphore;
 
-pub mod once;
+/// WIP
+#[allow(unused)]
+mod semaphore;
+
+mod once;
 pub use once::OnceLock;
 
-pub mod lazy;
+mod lazy;
 pub use lazy::LazyLock;

@@ -43,6 +43,9 @@ impl<T> OnceLock<T> {
 
     /// Gets the element, initialzing it with `init` if necessary
     ///
+    /// # Panics
+    /// If the given function panics, the panic is propagated to the caller
+    ///
     /// # Example
     /// ```
     /// use syncrs::OnceLock;

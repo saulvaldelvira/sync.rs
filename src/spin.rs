@@ -1,3 +1,5 @@
+//! A spinlock, the core primitive of this crate
+
 use core::sync::atomic::{AtomicBool, Ordering};
 
 /// A spin lock synchronization primitive.
