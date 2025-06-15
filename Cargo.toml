@@ -1,6 +1,6 @@
 [package]
 name = "syncrs"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 description = "spinlock-based syncronization primitives for no_std enviroments"
 authors = ["Saúl Valdelvira <saul@saulv.es>"]
@@ -8,3 +8,13 @@ license = "GPL-3.0-only"
 readme = "README"
 repository = "https://github.com/saulvaldelvira/sync.rs"
 keywords = ["no_std", "sync", "mutex"]
+
+[features]
+default = []
+alloc = ["allocator-api2"]
+
+[dependencies.allocator-api2]
+version = "0.3.0"
+default-features = false
+features = ["alloc"]
+optional = true

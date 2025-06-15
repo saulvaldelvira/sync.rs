@@ -7,6 +7,14 @@ Includes
 - RwLock
 - OnceLock
 - LazyLock
+- Arc
+
+== Features
+
+alloc (default: off)
+    Implement alloc-dependent primitives (Arc).
+    This feature depends on the allocator-api2 crate, to
+    provide support for the allocator api on stable rust.
 
 == Documentation ==
 To build the documentation, run `cargo doc`, or

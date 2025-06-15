@@ -19,6 +19,7 @@
 //! - [RwLock]
 //! - [OnceLock]
 //! - [LazyLock]
+#![cfg_attr(feature = "alloc", doc = "- [Arc]")]
 //!
 //! # Examples
 //! ## Mutex
@@ -72,6 +73,11 @@ pub mod rwlock;
 pub use rwlock::RwLock;
 
 pub mod spin;
+
+#[cfg(feature = "alloc")]
+mod arc;
+#[cfg(feature = "alloc")]
+pub use arc::Arc;
 
 /// WIP
 #[allow(unused)]
