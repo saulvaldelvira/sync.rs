@@ -24,3 +24,9 @@ pub use rwlock::RwLock;
 
 pub mod spin;
 pub mod semaphore;
+
+pub mod once;
+pub use once::OnceLock;
+
+pub mod lazy;
+pub use lazy::LazyLock;

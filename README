@@ -2,6 +2,12 @@ Sync(rs)
 ========
 Spinlock-based syncronization primitives for `no_std` rust enviroments
 
+Includes
+- Mutex
+- RwLock
+- OnceLock
+- LazyLock
+
 == Documentation ==
 To build the documentation, run `cargo doc`, or
 browse it online at https://docs.rs/syncrs
