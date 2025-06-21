@@ -19,6 +19,7 @@
 //! - [RwLock]
 //! - [OnceLock]
 //! - [LazyLock]
+//! - [Condvar]
 #![cfg_attr(feature = "alloc", doc = "- [Arc]")]
 //!
 //! # Examples
@@ -79,9 +80,11 @@ mod arc;
 #[cfg(feature = "alloc")]
 pub use arc::Arc;
 
-/// WIP
-#[allow(unused)]
 mod semaphore;
+pub use semaphore::Semaphore;
+
+pub mod condvar;
+pub use condvar::Condvar;
 
 mod once;
 pub use once::OnceLock;

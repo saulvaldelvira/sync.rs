@@ -4,7 +4,6 @@ use core::cell::UnsafeCell;
 use core::cmp::Ordering;
 use core::fmt::{Debug, Display};
 use core::ops::{Deref, DerefMut};
-use core::ptr::NonNull;
 
 use crate::spin::{SpinLock, SpinLockGuard};
 
@@ -50,31 +49,31 @@ unsafe impl<T: ?Sized + Send> Sync for Mutex<T> {}
 /// unlocks the mutex when droped.
 #[must_use = "if unused, the lock will release automatically"]
 pub struct MutexGuard<'a, T: ?Sized> {
-    data: NonNull<T>,
+    mutex: &'a Mutex<T>,
     _lock: SpinLockGuard<'a>,
 }
 
 impl<T: Debug> Debug for MutexGuard<'_, T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "MutexGuard({:?})", unsafe { &*self.data.as_ptr() })
+        write!(f, "MutexGuard({:?})", unsafe { &*self.mutex.data.get() })
     }
 }
 
 impl<T: Display> Display for MutexGuard<'_, T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        unsafe { <T as Display>::fmt(self.data.as_ref(), f) }
+        unsafe { <T as Display>::fmt(self.mutex.data.get().as_ref().unwrap(), f) }
     }
 }
 
 impl<T: PartialEq> PartialEq for MutexGuard<'_, T> {
     fn eq(&self, other: &Self) -> bool {
-        unsafe { self.data.as_ref().eq(other.data.as_ref()) }
+        unsafe { self.mutex.data.get().as_ref().unwrap().eq(other.mutex.data.get().as_ref().unwrap()) }
     }
 }
 
 impl<T: PartialOrd> PartialOrd for MutexGuard<'_, T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        unsafe { self.data.as_ref().partial_cmp(other.data.as_ref()) }
+        unsafe { self.mutex.data.get().as_ref().unwrap().partial_cmp(other.mutex.data.get().as_ref().unwrap()) }
     }
 }
 
@@ -90,13 +89,13 @@ impl<T> Deref for MutexGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { &*self.data.as_ptr() }
+        unsafe { &*self.mutex.data.get() }
     }
 }
 
 impl<T> DerefMut for MutexGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *self.data.as_ptr() }
+        unsafe { &mut *self.mutex.data.get() }
     }
 }
 
@@ -149,10 +148,7 @@ impl<T: ?Sized> Mutex<T> {
     /// ```
     pub fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
         self.lock.try_lock().map(|guard| {
-            unsafe {
-                let data = NonNull::new_unchecked( self.data.get() );
-                MutexGuard { _lock: guard, data }
-            }
+            MutexGuard { _lock: guard, mutex: self }
         })
     }
 
@@ -171,10 +167,7 @@ impl<T: ?Sized> Mutex<T> {
     /// ```
     pub fn lock(&self) -> MutexGuard<'_, T> {
         let guard = self.lock.lock();
-        unsafe {
-            let data = NonNull::new_unchecked( self.data.get() );
-            MutexGuard { _lock: guard, data }
-        }
+        MutexGuard { _lock: guard, mutex: self }
     }
 
     /// Gets a mutable reference to the object.
@@ -216,4 +209,8 @@ impl<T: Default> Default for Mutex<T> {
     fn default() -> Self {
         Self::new(T::default())
     }
+}
+
+pub (crate) fn guard_to_mutex<'a, T>(lock: MutexGuard<'a, T>) -> &'a Mutex<T> {
+    lock.mutex
 }
