@@ -1,3 +1,5 @@
+//! An atomic reference-counted smart pointer
+
 use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::ops::Deref;
@@ -7,7 +9,128 @@ use crate::Mutex;
 
 struct ArcInner<T> {
     strong_count: Mutex<usize>,
+    weak_count: Mutex<usize>,
     value: T,
+}
+
+impl<T> ArcInner<T> {
+    unsafe fn destroy<A: Allocator>(this: NonNull<Self>, a: &A) {
+        let layout = Layout::new::<ArcInner<T>>();
+        let inner = this.cast();
+        unsafe { a.deallocate(inner, layout); }
+    }
+}
+
+/// A weak pointer to an [Arc]
+///
+/// It is created from [Arc::downgrade]
+///
+/// A `Weak` pointer doesn't own the value.
+/// To use a weak pointer to need to [upgrade](Weak::upgrade)
+/// it to an [Arc] first
+///
+/// Weak pointers are used to avoid reference cycles.
+pub struct Weak<T, A: Allocator = Global> {
+    inner: NonNull<ArcInner<T>>,
+    allocator: A,
+}
+
+impl<T, A: Allocator> Drop for Weak<T, A> {
+    fn drop(&mut self) {
+        unsafe {
+            {
+                let mut weak = self.inner.as_ref().weak_count.lock();
+                *weak -= 1;
+                if *weak > 0 {
+                    return
+                }
+            }
+            if *self.inner.as_ref().strong_count.lock() == 0 {
+                ArcInner::destroy(self.inner, &self.allocator);
+            }
+        }
+    }
+}
+
+impl<T, A: Allocator> Weak<T, A> {
+    fn new(inner: NonNull<ArcInner<T>>, allocator: A) -> Self {
+        unsafe { *inner.as_ref().weak_count.lock() += 1 };
+        Self { inner, allocator }
+    }
+
+    /// Upgrades `self` to an [Arc].
+    ///
+    /// This may fail, since the original [Arc] from which
+    /// it was created could've been destroyed. In that case
+    /// returns [None]
+    pub fn upgrade(&self) -> Option<Arc<T, A>>
+    where
+        A: Clone
+    {
+        let can_upgrade = unsafe {
+            let mut strong = self.inner.as_ref().strong_count.lock();
+            if *strong > 0 {
+                *strong += 1;
+                true
+            } else {
+                false
+            }
+        };
+        can_upgrade.then(|| Arc {
+            inner: self.inner,
+            allocator: self.allocator.clone(),
+            _marker: PhantomData
+        })
+    }
+
+    /// Returns the strong count for this pointer
+    ///
+    /// # Example
+    /// ```
+    /// use syncrs::Arc;
+    ///
+    /// let strong = Arc::new(123);
+    ///
+    /// let weak = strong.downgrade();
+    /// assert_eq!(weak.strong_count(), 1);
+    ///
+    /// {
+    ///     let strong = Arc::clone(&strong);
+    ///     assert_eq!(weak.strong_count(), 2);
+    /// }
+    ///
+    /// assert_eq!(weak.strong_count(), 1);
+    /// drop(strong);
+    /// assert_eq!(weak.strong_count(), 0);
+    /// ```
+    pub fn strong_count(&self) -> usize {
+        unsafe { *self.inner.as_ref().strong_count.lock() }
+    }
+
+    /// Returns the weak count for this pointer
+    ///
+    /// # Example
+    /// ```
+    /// use syncrs::arc::{Arc, Weak};
+    ///
+    /// let n = Arc::new(123);
+    /// let weak = n.downgrade();
+    /// assert_eq!(weak.weak_count(), 1);
+    /// {
+    ///     let weak2 = Weak::clone(&weak);
+    ///     assert_eq!(weak.weak_count(), 2);
+    /// }
+    /// assert_eq!(weak.weak_count(), 1);
+    /// ```
+    pub fn weak_count(&self) -> usize {
+        unsafe { *self.inner.as_ref().weak_count.lock() }
+    }
+}
+
+impl<T, A: Allocator + Clone> Clone for Weak<T, A> {
+    fn clone(&self) -> Self {
+        Self::new(self.inner, self.allocator.clone())
+    }
 }
 
 /// A thread-safe reference counted smart pointer
@@ -26,8 +149,8 @@ struct ArcInner<T> {
 /// ```
 pub struct Arc<T, A: Allocator = Global> {
     inner: NonNull<ArcInner<T>>,
-    _marker: PhantomData<ArcInner<T>>,
     allocator: A,
+    _marker: PhantomData<ArcInner<T>>,
 }
 
 impl<T> Arc<T> {
@@ -53,6 +176,7 @@ impl<T, A: Allocator> Arc<T, A> {
                 ArcInner {
                     value,
                     strong_count: Mutex::new(1),
+                    weak_count: Mutex::new(0),
                 }
             );
         }
@@ -78,6 +202,33 @@ impl<T, A: Allocator> Arc<T, A> {
     /// ```
     pub fn strong_count(&self) -> usize {
         unsafe { *self.inner.as_ref().strong_count.lock() }
+    }
+
+    /// Returns the weak count for this pointer
+    ///
+    /// # Example
+    /// ```
+    /// use syncrs::Arc;
+    ///
+    /// let n = Arc::new(123);
+    /// assert_eq!(n.weak_count(), 0);
+    /// {
+    ///     let weak = n.downgrade();
+    ///     assert_eq!(n.weak_count(), 1);
+    /// }
+    /// assert_eq!(n.weak_count(), 0);
+    /// ```
+    pub fn weak_count(&self) -> usize {
+        unsafe { *self.inner.as_ref().weak_count.lock() }
+    }
+
+    /// Creates a [Weak] pointer from this [Arc].
+    #[inline]
+    pub fn downgrade(&self) -> Weak<T, A>
+    where
+        A: Clone
+    {
+        Weak::new(self.inner, self.allocator.clone())
     }
 }
 
@@ -118,17 +269,18 @@ impl<T, A: Allocator> Drop for Arc<T, A> {
         unsafe {
             {
                 let mut count = self.inner.as_ref().strong_count.lock();
-                if *count > 1 {
-                    *count -= 1;
+                *count -= 1;
+                if *count >= 1 {
                     return
                 }
             }
             let inner = self.inner.as_mut();
             ptr::drop_in_place(inner);
 
-            let layout = Layout::new::<ArcInner<T>>();
-            let inner = self.inner.cast();
-            self.allocator.deallocate(inner, layout);
+            let weak = self.inner.as_ref().weak_count.lock();
+            if *weak == 0 {
+                ArcInner::destroy(self.inner, &self.allocator);
+            }
         }
     }
 }

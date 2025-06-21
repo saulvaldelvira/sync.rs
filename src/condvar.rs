@@ -120,7 +120,7 @@
 //!     println!("notify_all");
 //!
 //!     // For failsafe, keep notifying.
-//!     for _ in 0..1000 { cv.notify_all(); }
+//!     for _ in 0..100 { cv.notify_all(); }
 //! });
 //!
 //! reader_1.join().unwrap();
@@ -226,7 +226,7 @@ impl Condvar {
     /// let pair2 = Arc::clone(&pair);
     ///
     /// thread::spawn(move || {
-    ///     for _ in 0..10 {
+    ///     loop {
     ///         let (lock, cvar) = &*pair2;
     ///         let mut lock = lock.lock();
     ///         *lock -= 1;

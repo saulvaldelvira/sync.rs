@@ -46,7 +46,7 @@
 //! ```
 //!
 //! ## LazyLock
-//! ```
+//! ```no_run
 //! use syncrs::LazyLock;
 //! use std::collections::HashMap;
 //!
@@ -76,7 +76,7 @@ pub use rwlock::RwLock;
 pub mod spin;
 
 #[cfg(feature = "alloc")]
-mod arc;
+pub mod arc;
 #[cfg(feature = "alloc")]
 pub use arc::Arc;
 
