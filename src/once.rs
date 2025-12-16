@@ -1,7 +1,141 @@
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 
-use crate::Mutex;
+use crate::{Condvar, Mutex};
+
+mod sealed {
+    pub trait SealedTrait {}
+    impl SealedTrait for () {}
+    impl SealedTrait for super::Waiteable {}
+}
+
+#[repr(transparent)]
+#[derive(Default)]
+pub struct Waiteable(Condvar);
+
+pub trait MaybeWaiteable: Default + sealed::SealedTrait {
+    fn notify(&self);
+}
+
+impl MaybeWaiteable for () {
+    fn notify(&self) { }
+}
+
+impl MaybeWaiteable for Waiteable {
+    fn notify(&self) {
+        self.0.notify_all();
+    }
+}
+
+/// A synchronization primitive for a one-time execution
+///
+/// This is a low-level primitive, used to compose others like [OnceLock]
+///
+/// # Example
+/// ```
+/// use syncrs::once::{Once, Waiteable};
+///
+/// static IS_INIT: Once<Waiteable> = Once::new_waiteable();
+///
+/// std::thread::spawn(|| {
+///     IS_INIT.call_once(|| {
+///         // Something ...
+///     })
+/// });
+///
+/// // Will block until the spawned thread marks IS_INIT as initialized
+/// IS_INIT.wait();
+///
+/// ```
+pub struct Once<W: MaybeWaiteable = ()> {
+    is_init: Mutex<bool>,
+    cv: W,
+}
+
+impl<W: MaybeWaiteable> Once<W> {
+    /// Calls the given function if this [Once] is uninitialized
+    /// Else, does nothing
+    pub fn call_once<F>(&self, f: F)
+    where
+        F: FnOnce()
+    {
+        {
+            let mut lock = self.is_init.lock();
+            if !*lock {
+                f();
+                *lock = true;
+                self.cv.notify();
+            }
+        }
+    }
+
+    /// Returns true if this [OnceLock] is initialized
+    ///
+    /// # Example
+    /// ````
+    /// use syncrs::once::Once;
+    ///
+    /// static CELL: Once= Once::new();
+    ///
+    /// assert!(!CELL.is_initialized());
+    /// CELL.call_once(|| {});
+    /// assert!(CELL.is_initialized());
+    /// ```
+    pub fn is_initialized(&self) -> bool {
+        *self.is_init.lock()
+    }
+
+    pub fn reset(&self) -> bool {
+        let mut lock = self.is_init.lock();
+        let was_init = *lock;
+        *lock = false;
+        was_init
+    }
+
+}
+
+impl Once<()> {
+    /// Creates a new uninitialized [Once]
+    pub const fn new() -> Self {
+        Self {
+            is_init: Mutex::new(false),
+            cv: ()
+        }
+    }
+}
+
+
+impl Once<Waiteable> {
+    /// Creates a new waiteable [Once]
+    ///
+    /// Waiteable [Once]s have the [wait](Self::wait) method
+    pub const fn new_waiteable() -> Self {
+        Self {
+            is_init: Mutex::new(false),
+            cv: Waiteable(Condvar::new())
+        }
+    }
+
+    /// Waits for `self` to be initialized
+    pub fn wait(&self) {
+        let lock = self.is_init.lock();
+        if !*lock {
+            let _ = self.cv.0.wait_while(lock, |n| !*n);
+        }
+    }
+}
+
+impl<W: MaybeWaiteable> Default for Once<W> {
+    fn default() -> Self {
+        Self {
+            is_init: Mutex::new(false),
+            cv: W::default(),
+        }
+    }
+}
+
+unsafe impl<W: MaybeWaiteable> Sync for Once<W> {}
+unsafe impl<W: MaybeWaiteable> Send for Once<W> {}
 
 /// A synchronization primitive that can only be written to once
 ///
@@ -27,9 +161,9 @@ use crate::Mutex;
 ///     Some(&12345),
 /// );
 /// ```
-pub struct OnceLock<T> {
+pub struct OnceLock<T, W: MaybeWaiteable = ()> {
     elem: UnsafeCell<MaybeUninit<T>>,
-    is_init: Mutex<bool>,
+    once: Once<W>,
 }
 
 impl<T> OnceLock<T> {
@@ -37,10 +171,24 @@ impl<T> OnceLock<T> {
     pub const fn new() -> Self {
         Self {
             elem: UnsafeCell::new(MaybeUninit::uninit()),
-            is_init: Mutex::new(false),
+            once: Once::new(),
         }
     }
+}
 
+impl<T> OnceLock<T, Waiteable> {
+    /// Creates a new waiteable [OnceLock]
+    ///
+    /// Waiteable [OnceLock]s have a [wait](Self::wait) method
+    pub const fn new_waiteable() -> Self {
+        Self {
+            elem: UnsafeCell::new(MaybeUninit::uninit()),
+            once: Once::new_waiteable(),
+        }
+    }
+}
+
+impl<T, W: MaybeWaiteable> OnceLock<T, W> {
     /// Gets the element, initialzing it with `init` if necessary
     ///
     /// # Panics
@@ -68,19 +216,15 @@ impl<T> OnceLock<T> {
     where
         F: FnOnce() -> T
     {
-        {
-            let mut lock = self.is_init.lock();
-            if !*lock {
-                /* SAFETY: We've locked the mutex, so only one thread
-                 * can reach this place. Therefore, the mutable reference
-                 * won't alias, and the element will only initialize once */
-                unsafe {
-                    self.elem.get().as_mut().unwrap().write(init());
-                }
-                *lock = true;
+        self.once.call_once(|| {
+            unsafe {
+                /* SAFETY: This will execute only once, and synchronously
+                 * Therefore, the mutable reference won't alias, and the
+                 * element will only initialize once */
+                self.elem.get().as_mut().unwrap().write(init());
             }
-        }
-        /* The lock is dropped. Now we can get as many shared
+        });
+        /* The element is initialized. Now we can get as many shared
          * references as we want*/
         unsafe { self.elem.get().as_ref().unwrap().assume_init_ref() }
     }
@@ -102,11 +246,8 @@ impl<T> OnceLock<T> {
     /// );
     /// ```
     pub fn get(&self) -> Option<&T> {
-        let lock = self.is_init.lock();
-        lock.then(|| {
-            /* The access is syncronized
-             * If lock is true, a previous call to get_or_init has initialized
-             * the element correctly. */
+        self.is_initialized().then(|| {
+            /* The element is initialized. */
             unsafe { self.elem.get().as_ref().unwrap().assume_init_ref() }
         })
     }
@@ -116,11 +257,8 @@ impl<T> OnceLock<T> {
     /// Since this borrows self mutably, it is statically inforced that no other thread
     /// is accessing the element.
     pub fn get_mut(&mut self) -> Option<&mut T> {
-        let lock = self.is_init.lock();
-        lock.then(|| {
-            /* The access is syncronized
-             * If lock is true, a previous call to get_or_init has initialized
-             * the element correctly. */
+        self.is_initialized().then(|| {
+            /* The element is initialized. */
             unsafe { self.elem.get().as_mut().unwrap().assume_init_mut() }
         })
     }
@@ -137,8 +275,9 @@ impl<T> OnceLock<T> {
     /// CELL.set(11).unwrap();
     /// assert!(CELL.is_initialized());
     /// ```
+    #[inline]
     pub fn is_initialized(&self) -> bool {
-        *self.is_init.lock()
+        self.once.is_initialized()
     }
 
     /// Sets the value of this [OnceLock].
@@ -156,19 +295,21 @@ impl<T> OnceLock<T> {
     /// assert_eq!(CELL.get(), Some(&92));
     /// ```
     pub fn set(&self, value: T) -> Result<(), T> {
-        {
-            let mut lock = self.is_init.lock();
-            if !*lock {
-                /* SAFETY: We've locked the mutex, so only one thread
-                 * can reach this place. Therefore, the mutable reference
-                 * won't alias, and the element will only initialize once */
-                unsafe {
-                    self.elem.get().as_mut().unwrap().write(value);
-                }
-                *lock = true;
-                return Ok(())
+        let mut result = Some(value);
+        self.once.call_once(|| {
+            unsafe {
+                /* Safety: result is ALWAYS Some. We only need an option in
+                 * the case we actually consume the value. */
+                let value = result.take().unwrap_unchecked();
+                /* SAFETY: This will execute only once, and synchronously
+                 * Therefore, the mutable reference won't alias, and the
+                 * element will only initialize once */
+                self.elem.get().as_mut().unwrap().write(value);
             }
-            return Err(value)
+        });
+        match result {
+            Some(val) => Err(val),
+            None => Ok(())
         }
     }
 
@@ -185,15 +326,11 @@ impl<T> OnceLock<T> {
     /// assert_eq!(cell.get(), None);
     /// ```
     pub fn take(&mut self) -> Option<T> {
-        if self.is_initialized() {
-            self.is_init = Mutex::new(false);
+        self.once.reset().then(|| {
             /* SAFETY: elem is initialized. And we've set is_init to false.
-                So this is the only place were the value will be read. */
-            let elem = unsafe { self.elem.get().read().assume_init() };
-            Some(elem)
-        } else {
-            None
-        }
+             * Only one thread -and only once- can reach here. */
+            unsafe { self.elem.get().read().assume_init() }
+        })
     }
 
     /// Consumes this [OnceLock], returning the contained element if it was initialized.
@@ -213,9 +350,21 @@ impl<T> OnceLock<T> {
     }
 }
 
-impl<T> Default for OnceLock<T> {
+impl<T> OnceLock<T, Waiteable> {
+    /// Waits for `self` to be initialized.
+    /// Returns the element once it's done.
+    pub fn wait(&self) -> &T {
+        self.once.wait();
+        unsafe { self.elem.get().as_ref().unwrap().assume_init_ref() }
+    }
+}
+
+impl<T, W: MaybeWaiteable> Default for OnceLock<T, W> {
     fn default() -> Self {
-        Self::new()
+        Self {
+            elem: UnsafeCell::new(MaybeUninit::uninit()),
+            once: Once::<W>::default(),
+        }
     }
 }
 

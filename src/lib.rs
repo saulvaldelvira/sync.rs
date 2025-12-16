@@ -86,7 +86,7 @@ pub use semaphore::Semaphore;
 pub mod condvar;
 pub use condvar::Condvar;
 
-mod once;
+pub mod once;
 pub use once::OnceLock;
 
 mod lazy;

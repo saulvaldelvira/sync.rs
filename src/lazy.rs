@@ -61,7 +61,7 @@ where
     pub fn get(&self) -> &T {
         let Self { once, init } = self;
         once.get_or_init(|| {
-            /* SAFETY: OnceCell guarantees that this function will only be
+            /* SAFETY: OnceLock guarantees that this function will only be
              * called once. So reading this FnOnce from init is fine.
              * The first time call self.get, we'll read the FnOnce from
              * `self.init` and we will never read it again. */
