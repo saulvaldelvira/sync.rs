@@ -110,6 +110,107 @@ impl<T> OnceLock<T> {
             unsafe { self.elem.get().as_ref().unwrap().assume_init_ref() }
         })
     }
+
+    /// Tries to get a mutable reference to the element, if it is initialized
+    ///
+    /// Since this borrows self mutably, it is statically inforced that no other thread
+    /// is accessing the element.
+    pub fn get_mut(&mut self) -> Option<&mut T> {
+        let lock = self.is_init.lock();
+        lock.then(|| {
+            /* The access is syncronized
+             * If lock is true, a previous call to get_or_init has initialized
+             * the element correctly. */
+            unsafe { self.elem.get().as_mut().unwrap().assume_init_mut() }
+        })
+    }
+
+    /// Returns true if this [OnceLock] is initialized
+    ///
+    /// # Example
+    /// ````
+    /// use syncrs::OnceLock;
+    ///
+    /// static CELL: OnceLock<i32> = OnceLock::new();
+    ///
+    /// assert!(!CELL.is_initialized());
+    /// CELL.set(11).unwrap();
+    /// assert!(CELL.is_initialized());
+    /// ```
+    pub fn is_initialized(&self) -> bool {
+        *self.is_init.lock()
+    }
+
+    /// Sets the value of this [OnceLock].
+    /// If it was already initialized, returns an Err variant with the given value.
+    ///
+    /// # Example
+    /// ```
+    /// use syncrs::OnceLock;
+    ///
+    /// static CELL: OnceLock<i32> = OnceLock::new();
+    ///
+    /// assert!(CELL.get().is_none());
+    /// assert_eq!(CELL.set(92), Ok(()));
+    /// assert_eq!(CELL.set(62), Err(62));
+    /// assert_eq!(CELL.get(), Some(&92));
+    /// ```
+    pub fn set(&self, value: T) -> Result<(), T> {
+        {
+            let mut lock = self.is_init.lock();
+            if !*lock {
+                /* SAFETY: We've locked the mutex, so only one thread
+                 * can reach this place. Therefore, the mutable reference
+                 * won't alias, and the element will only initialize once */
+                unsafe {
+                    self.elem.get().as_mut().unwrap().write(value);
+                }
+                *lock = true;
+                return Ok(())
+            }
+            return Err(value)
+        }
+    }
+
+    /// Resets this [OnceLock], returning the contained element if it was initialized.
+    ///
+    /// # Example
+    /// ````
+    /// use syncrs::OnceLock;
+    ///
+    /// let mut cell = OnceLock::new();
+    /// cell.set(12).unwrap();
+    /// assert_eq!(cell.get(), Some(&12));
+    /// assert_eq!(cell.take(), Some(12));
+    /// assert_eq!(cell.get(), None);
+    /// ```
+    pub fn take(&mut self) -> Option<T> {
+        if self.is_initialized() {
+            self.is_init = Mutex::new(false);
+            /* SAFETY: elem is initialized. And we've set is_init to false.
+                So this is the only place were the value will be read. */
+            let elem = unsafe { self.elem.get().read().assume_init() };
+            Some(elem)
+        } else {
+            None
+        }
+    }
+
+    /// Consumes this [OnceLock], returning the contained element if it was initialized.
+    ///
+    /// # Example
+    /// ````
+    /// use syncrs::OnceLock;
+    ///
+    /// let cell = OnceLock::new();
+    /// cell.set(12).unwrap();
+    /// assert_eq!(cell.get(), Some(&12));
+    /// assert_eq!(cell.into_inner(), Some(12));
+    /// ```
+    #[inline]
+    pub fn into_inner(mut self) -> Option<T> {
+        self.take()
+    }
 }
 
 impl<T> Default for OnceLock<T> {
